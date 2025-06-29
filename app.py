@@ -31,30 +31,50 @@ class SimplePDFQA:
             st.error(f"Error reading PDF: {str(e)}")
             return None
     
-    def chunk_text(self, text, chunk_size=500):
+    def chunk_text(self, text, chunk_size=300):
         """Split text into chunks for better processing"""
-        # Clean text
+        # Clean text more thoroughly
         text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r'[^\w\s\.\,\?\!\:\;\-\(\)]', ' ', text)
         text = text.strip()
         
-        # Split into sentences roughly
-        sentences = re.split(r'[.!?]+', text)
+        if len(text) < 50:
+            return [text] if text else []
         
+        # Split into paragraphs first, then sentences
+        paragraphs = text.split('\n')
         chunks = []
-        current_chunk = ""
         
-        for sentence in sentences:
-            if len(current_chunk + sentence) < chunk_size:
-                current_chunk += sentence + ". "
+        for paragraph in paragraphs:
+            if len(paragraph.strip()) < 20:
+                continue
+                
+            if len(paragraph) <= chunk_size:
+                chunks.append(paragraph.strip())
             else:
+                # Split long paragraphs into sentences
+                sentences = re.split(r'[.!?]+', paragraph)
+                current_chunk = ""
+                
+                for sentence in sentences:
+                    sentence = sentence.strip()
+                    if not sentence:
+                        continue
+                        
+                    if len(current_chunk + sentence) < chunk_size:
+                        current_chunk += sentence + ". "
+                    else:
+                        if current_chunk:
+                            chunks.append(current_chunk.strip())
+                        current_chunk = sentence + ". "
+                
                 if current_chunk:
                     chunks.append(current_chunk.strip())
-                current_chunk = sentence + ". "
         
-        if current_chunk:
-            chunks.append(current_chunk.strip())
-            
-        return chunks
+        # Filter out very short chunks
+        chunks = [chunk for chunk in chunks if len(chunk) > 30]
+        
+        return chunks if chunks else [text[:500]]  # Fallback
     
     def train_on_text(self, text):
         """Create TF-IDF vectors from text chunks"""
@@ -63,11 +83,15 @@ class SimplePDFQA:
         if not self.text_chunks:
             return False
             
-        # Create TF-IDF vectorizer
+        # Create TF-IDF vectorizer with better parameters
         self.vectorizer = TfidfVectorizer(
-            max_features=1000,
+            max_features=2000,
             stop_words='english',
-            ngram_range=(1, 2)
+            ngram_range=(1, 3),
+            min_df=1,
+            max_df=0.95,
+            lowercase=True,
+            strip_accents='unicode'
         )
         
         # Fit and transform text chunks
@@ -88,15 +112,25 @@ class SimplePDFQA:
         # Get top k most similar chunks
         top_indices = np.argsort(similarities)[-top_k:][::-1]
         
-        if similarities[top_indices[0]] < 0.1:
-            return "I couldn't find relevant information in the document to answer your question."
+        # Lower threshold and provide more context
+        max_similarity = similarities[top_indices[0]]
+        
+        if max_similarity < 0.05:  # Lower threshold
+            # If no good matches, provide a general summary
+            return f"I couldn't find specific information matching your question. Here's what the document contains:\n\n{self.text_chunks[0][:300]}..."
         
         # Combine top chunks for answer
-        relevant_chunks = [self.text_chunks[i] for i in top_indices if similarities[i] > 0.1]
+        relevant_chunks = []
+        for i in top_indices:
+            if similarities[i] > 0.02:  # Even lower threshold
+                relevant_chunks.append((self.text_chunks[i], similarities[i]))
         
-        answer = "Based on the document:\n\n"
-        for i, chunk in enumerate(relevant_chunks[:2], 1):
-            answer += f"{i}. {chunk}\n\n"
+        if not relevant_chunks:
+            return f"Here's a sample from the document:\n\n{self.text_chunks[0][:400]}..."
+        
+        answer = f"Based on the document (confidence: {max_similarity:.3f}):\n\n"
+        for i, (chunk, score) in enumerate(relevant_chunks[:2], 1):
+            answer += f"**Section {i}** (relevance: {score:.3f}):\n{chunk}\n\n"
         
         return answer
 
@@ -153,12 +187,44 @@ with col1:
             height=100
         )
         
-        if st.button("Get Answer", type="primary") and question:
-            with st.spinner("Finding answer..."):
-                answer = st.session_state.qa_system.answer_question(question)
-                
-                st.subheader("📝 Answer:")
-                st.write(answer)
+                if question:
+                    with st.spinner("Finding answer..."):
+                        answer = st.session_state.qa_system.answer_question(question)
+                        
+                        st.subheader("📝 Answer:")
+                        st.write(answer)
+                        
+                        # Debug info
+                        with st.expander("🔍 Debug Info"):
+                            st.write(f"Total chunks: {len(st.session_state.qa_system.text_chunks)}")
+                            st.write("Sample chunks:")
+                            for i, chunk in enumerate(st.session_state.qa_system.text_chunks[:3]):
+                                st.write(f"**Chunk {i+1}**: {chunk[:100]}...")
+        
+        # Quick question buttons
+        st.subheader("💡 Quick Questions")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("What is this about?"):
+                with st.spinner("Finding answer..."):
+                    answer = st.session_state.qa_system.answer_question("What is this document about? What is the main topic?")
+                    st.subheader("📝 Answer:")
+                    st.write(answer)
+        
+        with col2:
+            if st.button("Summarize"):
+                with st.spinner("Finding answer..."):
+                    answer = st.session_state.qa_system.answer_question("summarize main points key information")
+                    st.subheader("📝 Answer:")
+                    st.write(answer)
+        
+        with col3:
+            if st.button("Key details"):
+                with st.spinner("Finding answer..."):
+                    answer = st.session_state.qa_system.answer_question("important details key facts main information")
+                    st.subheader("📝 Answer:")
+                    st.write(answer)
     else:
         st.info("👈 Please upload and process a PDF document first using the sidebar.")
 
