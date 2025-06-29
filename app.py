@@ -290,9 +290,9 @@ with st.sidebar:
         
         col1, col2 = st.columns(2)
         with col1:
-            epochs = st.slider("Epochs", 5, 30, 15)
+            epochs = st.slider("Epochs", 5, 100, 30)
         with col2:
-            batch_size = st.selectbox("Batch Size", [16, 32, 64], index=1)
+            batch_size = st.selectbox("Batch Size", [4,8,16, 32, 64], index=1)
         
         learning_rate = st.select_slider(
             "Learning Rate", 
