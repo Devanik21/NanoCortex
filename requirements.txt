@@ -1,4 +1,5 @@
-tensorflow
+torch 
+matplotlib
 streamlit
 PyPDF2
 langchain
