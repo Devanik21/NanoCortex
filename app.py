@@ -62,7 +62,7 @@ class ImprovedTinyLM(nn.Module):
         
     def init_weights(self):
         for name, param in self.named_parameters():
-            if 'weight' in name:
+            if 'weight' in name and param.dim() > 1:  # Only initialize if tensor has >=2 dimensions
                 if 'lstm' in name:
                     nn.init.orthogonal_(param)
                 else:
