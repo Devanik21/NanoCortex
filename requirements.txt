@@ -1,6 +1,6 @@
 streamlit
 PyPDF2
 langchain
-sentence-transformers
-faiss-cpu
-huggingface-hub
+scikit-learn
+numpy
+
