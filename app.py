@@ -1,23 +1,33 @@
 import streamlit as st
 import PyPDF2
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import re
-from io import BytesIO
+from collections import Counter
+import pickle
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Set page config
 st.set_page_config(
-    page_title="PDF Q&A App",
-    page_icon="📄",
+    page_title="PDF Tiny Language Model",
+    page_icon="🧠",
     layout="wide"
 )
 
-class SimplePDFQA:
+class TinyLanguageModel:
     def __init__(self):
+        self.tokenizer = None
+        self.model = None
+        self.vocab_size = 0
+        self.max_sequence_length = 50
+        self.word_to_idx = {}
+        self.idx_to_word = {}
         self.text_chunks = []
-        self.vectorizer = None
-        self.tfidf_matrix = None
+        self.is_trained = False
         
     def extract_text_from_pdf(self, pdf_file):
         """Extract text from uploaded PDF file"""
@@ -31,223 +41,317 @@ class SimplePDFQA:
             st.error(f"Error reading PDF: {str(e)}")
             return None
     
-    def chunk_text(self, text, chunk_size=300):
-        """Split text into chunks for better processing"""
-        # Clean text more thoroughly
+    def preprocess_text(self, text):
+        """Clean and preprocess text"""
+        # Clean text
+        text = re.sub(r'[^\w\s\.\,\?\!\:\;\-]', ' ', text)
         text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'[^\w\s\.\,\?\!\:\;\-\(\)]', ' ', text)
-        text = text.strip()
+        text = text.lower().strip()
         
-        if len(text) < 50:
-            return [text] if text else []
+        # Split into chunks for training
+        sentences = re.split(r'[.!?]+', text)
+        self.text_chunks = [s.strip() for s in sentences if len(s.strip()) > 10]
         
-        # Split into paragraphs first, then sentences
-        paragraphs = text.split('\n')
-        chunks = []
-        
-        for paragraph in paragraphs:
-            if len(paragraph.strip()) < 20:
-                continue
-                
-            if len(paragraph) <= chunk_size:
-                chunks.append(paragraph.strip())
-            else:
-                # Split long paragraphs into sentences
-                sentences = re.split(r'[.!?]+', paragraph)
-                current_chunk = ""
-                
-                for sentence in sentences:
-                    sentence = sentence.strip()
-                    if not sentence:
-                        continue
-                        
-                    if len(current_chunk + sentence) < chunk_size:
-                        current_chunk += sentence + ". "
-                    else:
-                        if current_chunk:
-                            chunks.append(current_chunk.strip())
-                        current_chunk = sentence + ". "
-                
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-        
-        # Filter out very short chunks
-        chunks = [chunk for chunk in chunks if len(chunk) > 30]
-        
-        return chunks if chunks else [text[:500]]  # Fallback
+        return text
     
-    def train_on_text(self, text):
-        """Create TF-IDF vectors from text chunks"""
-        self.text_chunks = self.chunk_text(text)
+    def build_vocabulary(self, text):
+        """Build vocabulary from text"""
+        words = text.split()
+        word_counts = Counter(words)
         
-        if not self.text_chunks:
-            return False
-            
-        # Create TF-IDF vectorizer with better parameters
-        self.vectorizer = TfidfVectorizer(
-            max_features=2000,
-            stop_words='english',
-            ngram_range=(1, 3),
-            min_df=1,
-            max_df=0.95,
-            lowercase=True,
-            strip_accents='unicode'
+        # Keep most common words
+        most_common = word_counts.most_common(2000)
+        
+        # Build word-to-index mapping
+        self.word_to_idx = {'<UNK>': 0, '<START>': 1, '<END>': 2}
+        self.idx_to_word = {0: '<UNK>', 1: '<START>', 2: '<END>'}
+        
+        for i, (word, _) in enumerate(most_common):
+            self.word_to_idx[word] = i + 3
+            self.idx_to_word[i + 3] = word
+        
+        self.vocab_size = len(self.word_to_idx)
+        
+    def text_to_sequences(self, text):
+        """Convert text to sequences of token indices"""
+        words = text.split()
+        sequences = []
+        
+        for i in range(len(words) - self.max_sequence_length):
+            sequence = []
+            for j in range(i, i + self.max_sequence_length + 1):
+                word = words[j] if j < len(words) else '<END>'
+                sequence.append(self.word_to_idx.get(word, 0))
+            sequences.append(sequence)
+        
+        return np.array(sequences)
+    
+    def create_model(self):
+        """Create a simple LSTM language model"""
+        model = Sequential([
+            Embedding(self.vocab_size, 100, input_length=self.max_sequence_length),
+            LSTM(128, return_sequences=True, dropout=0.2),
+            LSTM(128, dropout=0.2),
+            Dense(256, activation='relu'),
+            Dropout(0.3),
+            Dense(self.vocab_size, activation='softmax')
+        ])
+        
+        model.compile(
+            optimizer=Adam(learning_rate=0.001),
+            loss='sparse_categorical_crossentropy',
+            metrics=['accuracy']
         )
         
-        # Fit and transform text chunks
-        self.tfidf_matrix = self.vectorizer.fit_transform(self.text_chunks)
-        return True
+        return model
     
-    def answer_question(self, question, top_k=3):
-        """Find most relevant text chunks and create answer"""
-        if not self.vectorizer or not self.tfidf_matrix.shape[0]:
-            return "No document loaded. Please upload a PDF first."
+    def train_model(self, text, epochs=10):
+        """Train the language model"""
+        # Preprocess text and build vocabulary
+        clean_text = self.preprocess_text(text)
+        self.build_vocabulary(clean_text)
         
-        # Transform question using same vectorizer
-        question_vector = self.vectorizer.transform([question])
+        if self.vocab_size < 50:
+            return False, "Not enough vocabulary to train model"
         
-        # Calculate cosine similarity
-        similarities = cosine_similarity(question_vector, self.tfidf_matrix).flatten()
+        # Create sequences
+        sequences = self.text_to_sequences(clean_text)
         
-        # Get top k most similar chunks
-        top_indices = np.argsort(similarities)[-top_k:][::-1]
+        if len(sequences) < 10:
+            return False, "Not enough training data"
         
-        # Lower threshold and provide more context
-        max_similarity = similarities[top_indices[0]]
+        # Prepare training data
+        X = sequences[:, :-1]  # Input sequences
+        y = sequences[:, -1]   # Target words
         
-        if max_similarity < 0.05:  # Lower threshold
-            # If no good matches, provide a general summary
-            return f"I couldn't find specific information matching your question. Here's what the document contains:\n\n{self.text_chunks[0][:300]}..."
+        # Create and train model
+        self.model = self.create_model()
         
-        # Combine top chunks for answer
-        relevant_chunks = []
-        for i in top_indices:
-            if similarities[i] > 0.02:  # Even lower threshold
-                relevant_chunks.append((self.text_chunks[i], similarities[i]))
+        # Train with progress bar
+        history = self.model.fit(
+            X, y,
+            epochs=epochs,
+            batch_size=32,
+            validation_split=0.2,
+            verbose=0
+        )
         
-        if not relevant_chunks:
-            return f"Here's a sample from the document:\n\n{self.text_chunks[0][:400]}..."
+        self.is_trained = True
+        return True, history
+    
+    def generate_text(self, seed_text, max_length=100):
+        """Generate text using the trained model"""
+        if not self.is_trained or not self.model:
+            return "Model is not trained yet!"
         
-        answer = f"Based on the document (confidence: {max_similarity:.3f}):\n\n"
-        for i, (chunk, score) in enumerate(relevant_chunks[:2], 1):
-            answer += f"**Section {i}** (relevance: {score:.3f}):\n{chunk}\n\n"
+        # Prepare seed
+        words = seed_text.lower().split()
+        sequence = []
         
-        return answer
+        for word in words[-self.max_sequence_length:]:
+            sequence.append(self.word_to_idx.get(word, 0))
+        
+        # Pad if necessary
+        while len(sequence) < self.max_sequence_length:
+            sequence.insert(0, 0)
+        
+        generated = words.copy()
+        
+        for _ in range(max_length):
+            # Predict next word
+            x = np.array([sequence])
+            predictions = self.model.predict(x, verbose=0)[0]
+            
+            # Sample from top predictions
+            top_indices = np.argsort(predictions)[-5:]
+            probabilities = predictions[top_indices]
+            probabilities = probabilities / np.sum(probabilities)
+            
+            next_idx = np.random.choice(top_indices, p=probabilities)
+            next_word = self.idx_to_word.get(next_idx, '<UNK>')
+            
+            if next_word in ['<END>', '<UNK>']:
+                break
+                
+            generated.append(next_word)
+            
+            # Update sequence
+            sequence = sequence[1:] + [next_idx]
+        
+        return ' '.join(generated)
+    
+    def answer_question(self, question):
+        """Answer questions using both retrieval and generation"""
+        if not self.text_chunks:
+            return "No document loaded!"
+        
+        # Simple retrieval first
+        question_words = set(question.lower().split())
+        best_chunk = ""
+        best_score = 0
+        
+        for chunk in self.text_chunks:
+            chunk_words = set(chunk.lower().split())
+            overlap = len(question_words.intersection(chunk_words))
+            if overlap > best_score:
+                best_score = overlap
+                best_chunk = chunk
+        
+        if best_score > 0:
+            # Use the best chunk as context and generate response
+            if self.is_trained:
+                context = best_chunk[:100]  # First part as seed
+                generated = self.generate_text(context, max_length=50)
+                return f"Based on the document:\n\n{generated}"
+            else:
+                return f"Found relevant information:\n\n{best_chunk}"
+        else:
+            return "Could not find relevant information in the document."
 
-# Initialize the QA system
-if 'qa_system' not in st.session_state:
-    st.session_state.qa_system = SimplePDFQA()
+# Initialize the model
+if 'tlm' not in st.session_state:
+    st.session_state.tlm = TinyLanguageModel()
     st.session_state.document_loaded = False
+    st.session_state.model_trained = False
 
 # App header
-st.title("📄 Simple PDF Q&A App")
-st.markdown("Upload a PDF document and ask questions about its content!")
+st.title("🧠 PDF Tiny Language Model Trainer")
+st.markdown("Upload a PDF and train a small neural language model on its content!")
 
-# Sidebar for PDF upload
+# Sidebar for PDF upload and training
 with st.sidebar:
-    st.header("📁 Upload Document")
+    st.header("📁 Document & Training")
+    
     uploaded_file = st.file_uploader(
         "Choose a PDF file",
         type="pdf",
-        help="Upload a PDF document to analyze"
+        help="Upload a PDF document to train the model"
     )
     
     if uploaded_file is not None:
-        if st.button("Process PDF", type="primary"):
-            with st.spinner("Processing PDF..."):
-                # Extract text from PDF
-                text = st.session_state.qa_system.extract_text_from_pdf(uploaded_file)
+        if st.button("📄 Process PDF", type="primary"):
+            with st.spinner("Extracting text from PDF..."):
+                text = st.session_state.tlm.extract_text_from_pdf(uploaded_file)
                 
-                if text:
-                    # Train the system on the text
-                    success = st.session_state.qa_system.train_on_text(text)
-                    
-                    if success:
-                        st.session_state.document_loaded = True
-                        st.success("✅ PDF processed successfully!")
-                        st.info(f"Document contains {len(st.session_state.qa_system.text_chunks)} text chunks")
-                    else:
-                        st.error("Failed to process the PDF content")
+                if text and len(text) > 100:
+                    st.session_state.tlm.raw_text = text
+                    st.session_state.document_loaded = True
+                    st.success("✅ PDF processed successfully!")
+                    st.info(f"Text length: {len(text)} characters")
                 else:
-                    st.error("Could not extract text from PDF")
+                    st.error("Could not extract sufficient text from PDF")
+    
+    if st.session_state.document_loaded and not st.session_state.model_trained:
+        st.header("🧠 Train Model")
+        
+        epochs = st.slider("Training Epochs", 5, 30, 15)
+        
+        if st.button("🚀 Train Language Model", type="primary"):
+            with st.spinner(f"Training model for {epochs} epochs..."):
+                progress_bar = st.progress(0)
+                
+                success, result = st.session_state.tlm.train_model(
+                    st.session_state.tlm.raw_text, 
+                    epochs=epochs
+                )
+                
+                progress_bar.progress(1.0)
+                
+                if success:
+                    st.session_state.model_trained = True
+                    st.success("🎉 Model trained successfully!")
+                    
+                    # Show training stats
+                    if hasattr(result, 'history'):
+                        final_loss = result.history['loss'][-1]
+                        final_acc = result.history['accuracy'][-1]
+                        st.metric("Final Loss", f"{final_loss:.3f}")
+                        st.metric("Final Accuracy", f"{final_acc:.3f}")
+                else:
+                    st.error(f"Training failed: {result}")
 
 # Main content area
-col1, col2 = st.columns([2, 1])
+col1, col2 = st.columns([3, 2])
 
 with col1:
-    st.header("💬 Ask Questions")
-    
-    if st.session_state.document_loaded:
-        st.success("Document is ready! Ask any question about the content.")
+    if st.session_state.model_trained:
+        st.header("🤖 AI Assistant")
+        st.success("Model is trained and ready!")
         
-        # Question input
+        # Question answering
         question = st.text_area(
-            "Enter your question:",
-            placeholder="What is this document about?",
-            height=100
+            "Ask a question about the document:",
+            placeholder="What is the main topic discussed?",
+            height=80
         )
         
-                if question:
-                    with st.spinner("Finding answer..."):
-                        answer = st.session_state.qa_system.answer_question(question)
-                        
-                        st.subheader("📝 Answer:")
-                        st.write(answer)
-                        
-                        # Debug info
-                        with st.expander("🔍 Debug Info"):
-                            st.write(f"Total chunks: {len(st.session_state.qa_system.text_chunks)}")
-                            st.write("Sample chunks:")
-                            for i, chunk in enumerate(st.session_state.qa_system.text_chunks[:3]):
-                                st.write(f"**Chunk {i+1}**: {chunk[:100]}...")
+        if st.button("🔍 Get Answer") and question:
+            with st.spinner("Generating answer..."):
+                answer = st.session_state.tlm.answer_question(question)
+                st.subheader("💬 Answer:")
+                st.write(answer)
         
-        # Quick question buttons
-        st.subheader("💡 Quick Questions")
-        col1, col2, col3 = st.columns(3)
+        st.markdown("---")
         
-        with col1:
-            if st.button("What is this about?"):
-                with st.spinner("Finding answer..."):
-                    answer = st.session_state.qa_system.answer_question("What is this document about? What is the main topic?")
-                    st.subheader("📝 Answer:")
-                    st.write(answer)
+        # Text generation
+        st.subheader("✨ Generate Text")
+        seed_text = st.text_input(
+            "Enter seed text to continue:",
+            placeholder="The document discusses..."
+        )
         
-        with col2:
-            if st.button("Summarize"):
-                with st.spinner("Finding answer..."):
-                    answer = st.session_state.qa_system.answer_question("summarize main points key information")
-                    st.subheader("📝 Answer:")
-                    st.write(answer)
-        
-        with col3:
-            if st.button("Key details"):
-                with st.spinner("Finding answer..."):
-                    answer = st.session_state.qa_system.answer_question("important details key facts main information")
-                    st.subheader("📝 Answer:")
-                    st.write(answer)
+        if st.button("📝 Generate") and seed_text:
+            with st.spinner("Generating text..."):
+                generated = st.session_state.tlm.generate_text(seed_text, max_length=80)
+                st.subheader("🎯 Generated Text:")
+                st.write(generated)
+    
+    elif st.session_state.document_loaded:
+        st.info("📄 Document loaded! Now train the language model using the sidebar.")
     else:
-        st.info("👈 Please upload and process a PDF document first using the sidebar.")
+        st.info("👈 Upload a PDF document first to get started.")
 
 with col2:
-    st.header("ℹ️ How it works")
-    st.markdown("""
-    1. **Upload PDF**: Choose your PDF file
-    2. **Process**: Click 'Process PDF' to extract and analyze text
-    3. **Ask Questions**: Type questions about the document
-    4. **Get Answers**: The app finds relevant sections and provides answers
+    st.header("ℹ️ How it Works")
     
-    **Note**: This uses text similarity matching to find relevant content from your PDF.
-    """)
-    
-    if st.session_state.document_loaded:
-        st.header("📊 Document Stats")
-        st.metric("Text Chunks", len(st.session_state.qa_system.text_chunks))
+    if st.session_state.model_trained:
+        st.markdown("""
+        **🧠 Tiny Language Model Trained!**
         
-        # Show sample of first chunk
-        if st.session_state.qa_system.text_chunks:
-            with st.expander("Preview first chunk"):
-                st.text(st.session_state.qa_system.text_chunks[0][:200] + "...")
+        **Architecture:**
+        - Embedding Layer (100D)
+        - 2x LSTM Layers (128 units)
+        - Dense Layers with Dropout
+        - Vocabulary: {} words
+        
+        **Capabilities:**
+        - Answer questions about content
+        - Generate text in document style
+        - Learned patterns from your PDF
+        """.format(st.session_state.tlm.vocab_size))
+        
+        st.header("📊 Model Stats")
+        if hasattr(st.session_state.tlm, 'vocab_size'):
+            st.metric("Vocabulary Size", st.session_state.tlm.vocab_size)
+            st.metric("Text Chunks", len(st.session_state.tlm.text_chunks))
+            st.metric("Sequence Length", st.session_state.tlm.max_sequence_length)
+    
+    else:
+        st.markdown("""
+        **Training Process:**
+        1. 📄 Upload PDF document
+        2. 🔤 Extract and tokenize text
+        3. 📚 Build vocabulary from content
+        4. 🧠 Train LSTM neural network
+        5. 🤖 Use for Q&A and text generation
+        
+        **Model Architecture:**
+        - Embedding layer for word vectors
+        - LSTM layers for sequence learning
+        - Dense layers for prediction
+        - Trained specifically on your document
+        """)
 
 # Footer
 st.markdown("---")
-st.markdown("Built with Streamlit • Simple PDF Q&A System")
+st.markdown("🧠 **Tiny Language Model** • Trains a real neural network on your PDF content!")
