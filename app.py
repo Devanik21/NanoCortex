@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 # Set page config
 st.set_page_config(
-    page_title="PDF Tiny Language Model",
+    page_title="PDF Small Language Model", # Updated title
     page_icon="🧠",
     layout="wide"
 )
@@ -27,9 +27,9 @@ class TextDataset(Dataset):
         sequence = self.sequences[idx]
         return torch.tensor(sequence[:-1], dtype=torch.long), torch.tensor(sequence[-1], dtype=torch.long)
 
-class TinyLSTM(nn.Module):
+class SmallLSTM(nn.Module): # Renamed class
     def __init__(self, vocab_size, embedding_dim=64, hidden_dim=128, num_layers=2):
-        super(TinyLSTM, self).__init__()
+        super(SmallLSTM, self).__init__() # Updated super call
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         
@@ -45,11 +45,13 @@ class TinyLSTM(nn.Module):
         output = self.fc(lstm_out)
         return output
 
-class TinyLanguageModel:
+class SmallLanguageModel: # Renamed class
     def __init__(self):
         self.model = None
         self.vocab_size = 0
-        self.max_sequence_length = 30
+        # Default configurable parameters
+        self.max_sequence_length = 64 # Increased default
+        self.max_vocab_size = 5000    # Increased default and made configurable limit
         self.word_to_idx = {}
         self.idx_to_word = {}
         self.text_chunks = []
@@ -70,8 +72,9 @@ class TinyLanguageModel:
     
     def preprocess_text(self, text):
         """Clean and preprocess text"""
-        # Clean text
-        text = re.sub(r'[^\w\s\.\,\?\!\:\;\-]', ' ', text)
+        # Clean text - keep punctuation attached initially
+        text = re.sub(r'([.,!?;:])', r' \1 ', text) # Add spaces around punctuation
+        text = re.sub(r'[^\w\s.,!?;:-]', ' ', text) # Remove other special characters
         text = re.sub(r'\s+', ' ', text)
         text = text.lower().strip()
         
@@ -85,87 +88,96 @@ class TinyLanguageModel:
         """Build vocabulary from text"""
         words = text.split()
         word_counts = Counter(words)
-        
-        # Keep most common words
-        most_common = word_counts.most_common(1500)
-        
+
+        # Keep most common words up to max_vocab_size
+        most_common = word_counts.most_common(self.max_vocab_size - 3) # Reserve space for special tokens
+
         # Build word-to-index mapping
         self.word_to_idx = {'<UNK>': 0, '<START>': 1, '<END>': 2}
         self.idx_to_word = {0: '<UNK>', 1: '<START>', 2: '<END>'}
-        
+
         for i, (word, _) in enumerate(most_common):
             self.word_to_idx[word] = i + 3
             self.idx_to_word[i + 3] = word
-        
+
         self.vocab_size = len(self.word_to_idx)
-        
+
     def text_to_sequences(self, text):
         """Convert text to sequences of token indices"""
         words = text.split()
         sequences = []
-        
+
+        # Use configurable max_sequence_length
         for i in range(len(words) - self.max_sequence_length):
             sequence = []
             for j in range(i, i + self.max_sequence_length + 1):
                 word = words[j] if j < len(words) else '<END>'
                 sequence.append(self.word_to_idx.get(word, 0))
             sequences.append(sequence)
-        
+
         return sequences
     
-    def train_model(self, text, epochs=15, batch_size=32, learning_rate=0.001):
+    def train_model(self, text, epochs=15, batch_size=32, learning_rate=0.001, progress_bar=None, status_text=None):
         """Train the language model"""
         # Preprocess text and build vocabulary
         clean_text = self.preprocess_text(text)
         self.build_vocabulary(clean_text)
-        
-        if self.vocab_size < 50:
+
+        if self.vocab_size < 50: # Still need a minimum vocabulary
             return False, "Not enough vocabulary to train model"
-        
+
         # Create sequences
         sequences = self.text_to_sequences(clean_text)
-        
-        if len(sequences) < 20:
+
+        if len(sequences) < 20: # Still need minimum data
             return False, "Not enough training data"
-        
+
         # Create dataset and dataloader
         dataset = TextDataset(sequences)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-        
-        # Initialize model
-        self.model = TinyLSTM(self.vocab_size).to(self.device)
+
+        # Initialize model - use SmallLSTM
+        self.model = SmallLSTM(self.vocab_size).to(self.device)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
-        
+
         # Training loop
         losses = []
         accuracies = []
-        
+
         for epoch in range(epochs):
             epoch_loss = 0
             correct = 0
             total = 0
-            
+
+            self.model.train() # Set model to training mode
+
             for batch_x, batch_y in dataloader:
                 batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
-                
+
                 optimizer.zero_grad()
                 outputs = self.model(batch_x)
                 loss = criterion(outputs, batch_y)
                 loss.backward()
                 optimizer.step()
-                
+
                 epoch_loss += loss.item()
                 _, predicted = torch.max(outputs.data, 1)
                 total += batch_y.size(0)
                 correct += (predicted == batch_y).sum().item()
-            
+
             avg_loss = epoch_loss / len(dataloader)
             accuracy = 100 * correct / total
-            
+
             losses.append(avg_loss)
             accuracies.append(accuracy)
-        
+
+            # Update Streamlit UI elements if provided
+            if progress_bar:
+                progress_bar.progress((epoch + 1) / epochs)
+            if status_text:
+                status_text.text(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f} | Acc: {accuracy:.2f}%")
+
         self.is_trained = True
         return True, {'losses': losses, 'accuracies': accuracies}
     
@@ -177,15 +189,18 @@ class TinyLanguageModel:
         self.model.eval()
         
         # Prepare seed
-        words = seed_text.lower().split()
+        # Preprocess seed text similarly to training data
+        seed_text = self.preprocess_text(seed_text)
+        words = seed_text.split()
         sequence = []
         
+        # Use configurable max_sequence_length
         for word in words[-self.max_sequence_length:]:
             sequence.append(self.word_to_idx.get(word, 0))
         
         # Pad if necessary
         while len(sequence) < self.max_sequence_length:
-            sequence.insert(0, 0)
+            sequence.insert(0, 0) # Pad with UNK token
         
         generated = words.copy()
         
@@ -203,9 +218,9 @@ class TinyLanguageModel:
                 next_idx = torch.multinomial(probabilities, 1).item()
                 next_word = self.idx_to_word.get(next_idx, '<UNK>')
                 
-                if next_word in ['<END>', '<UNK>'] or len(generated) > max_length:
+                if next_word in ['<END>'] or len(generated) > max_length: # Stop on <END>
                     break
-                    
+                
                 generated.append(next_word)
                 
                 # Update sequence
@@ -219,43 +234,53 @@ class TinyLanguageModel:
             return "No document loaded!"
         
         # Simple retrieval first
-        question_words = set(question.lower().split())
+        # Preprocess question similarly
+        question = self.preprocess_text(question)
+        question_words = set(question.split())
         best_chunk = ""
         best_score = 0
         
         for chunk in self.text_chunks:
-            chunk_words = set(chunk.lower().split())
+            # Preprocess chunk for comparison
+            clean_chunk = self.preprocess_text(chunk)
+            chunk_words = set(clean_chunk.split())
             overlap = len(question_words.intersection(chunk_words))
-            score = overlap + len([w for w in question_words if w in chunk.lower()])
+            # Simple score: overlap + count of question words present in chunk (case-insensitive)
+            score = overlap + sum(1 for w in question_words if w in clean_chunk.split())
             if score > best_score:
                 best_score = score
-                best_chunk = chunk
+                best_chunk = chunk # Keep original chunk for context
         
         if best_score > 0:
             # Use the best chunk as context and generate response
             if self.is_trained and self.model:
-                context = best_chunk[:100]  # First part as seed
-                generated = self.generate_text(context, max_length=40)
+                # Use a larger portion of the best chunk as seed, up to sequence length limit
+                context_words = self.preprocess_text(best_chunk).split()
+                seed_words = context_words[:self.max_sequence_length]
+                seed_text = ' '.join(seed_words)
+
+                generated = self.generate_text(seed_text, max_length=60) # Generate a bit longer answer
                 return f"**Based on the document:**\n\n{generated}"
             else:
                 return f"**Found relevant information:**\n\n{best_chunk}"
         else:
             if self.is_trained and self.model:
-                # Generate based on question keywords
-                seed = ' '.join(list(question_words)[:5])
+                # Generate based on question keywords if no relevant chunk found
+                seed = ' '.join(list(question_words)[:min(5, len(question_words))]) # Use up to 5 keywords
                 generated = self.generate_text(seed, max_length=40)
-                return f"**AI Generated Response:**\n\n{generated}"
+                return f"**AI Generated Response (based on keywords):**\n\n{generated}" # Clarify generation source
             else:
                 return "Could not find relevant information in the document."
 
-# Initialize the model
-if 'tlm' not in st.session_state:
-    st.session_state.tlm = TinyLanguageModel()
+
+# Initialize the model - use SmallLanguageModel and slm session state key
+if 'slm' not in st.session_state:
+    st.session_state.slm = SmallLanguageModel()
     st.session_state.document_loaded = False
     st.session_state.model_trained = False
 
 # App header
-st.title("🧠 PDF Tiny Language Model (PyTorch)")
+st.title("🧠 PDF Small Language Model (PyTorch)") # Updated title
 st.markdown("Upload a PDF and train a small neural language model on its content!")
 
 # Sidebar for PDF upload and training
@@ -271,11 +296,14 @@ with st.sidebar:
     if uploaded_file is not None:
         if st.button("📄 Process PDF", type="primary"):
             with st.spinner("Extracting text from PDF..."):
-                text = st.session_state.tlm.extract_text_from_pdf(uploaded_file)
+                # Use slm session state key
+                text = st.session_state.slm.extract_text_from_pdf(uploaded_file)
                 
                 if text and len(text) > 100:
-                    st.session_state.tlm.raw_text = text
+                    # Use slm session state key
+                    st.session_state.slm.raw_text = text
                     st.session_state.document_loaded = True
+                    st.session_state.model_trained = False # Reset trained status on new doc
                     st.success("✅ PDF processed successfully!")
                     st.info(f"📊 Text length: {len(text):,} characters")
                     
@@ -288,6 +316,17 @@ with st.sidebar:
     if st.session_state.document_loaded and not st.session_state.model_trained:
         st.header("🧠 Train Model")
         
+        # Add configurable parameters
+        st.subheader("⚙️ Model Configuration")
+        max_vocab_size = st.slider("Max Vocabulary Size", 1000, 10000, st.session_state.slm.max_vocab_size, 500)
+        max_sequence_length = st.slider("Sequence Length", 30, 128, st.session_state.slm.max_sequence_length, 8)
+
+        # Update model instance with chosen parameters
+        st.session_state.slm.max_vocab_size = max_vocab_size
+        st.session_state.slm.max_sequence_length = max_sequence_length
+
+
+        st.subheader("🏋️ Training Parameters")
         col1, col2 = st.columns(2)
         with col1:
             epochs = st.slider("Epochs", 5, 100, 30)
@@ -302,49 +341,51 @@ with st.sidebar:
         )
         
         if st.button("🚀 Train Language Model", type="primary"):
-            with st.spinner(f"Training model for {epochs} epochs..."):
+            with st.spinner(f"Preparing for training..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                
-                # Simulate progress updates
-                for i in range(epochs):
-                    progress_bar.progress((i + 1) / epochs)
-                    status_text.text(f"Epoch {i+1}/{epochs}")
-                
-                success, result = st.session_state.tlm.train_model(
-                    st.session_state.tlm.raw_text, 
-                    epochs=epochs,
-                    batch_size=batch_size,
-                    learning_rate=learning_rate
-                )
-                
-                if success:
-                    st.session_state.model_trained = True
-                    st.success("🎉 Model trained successfully!")
-                    
-                    # Show training stats
-                    final_loss = result['losses'][-1]
-                    final_acc = result['accuracies'][-1]
-                    st.metric("Final Loss", f"{final_loss:.3f}")
-                    st.metric("Final Accuracy", f"{final_acc:.1f}%")
-                    
-                    # Plot training progress
-                    import matplotlib.pyplot as plt
-                    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-                    
-                    ax1.plot(result['losses'])
-                    ax1.set_title('Training Loss')
-                    ax1.set_xlabel('Epoch')
-                    ax1.set_ylabel('Loss')
-                    
-                    ax2.plot(result['accuracies'])
-                    ax2.set_title('Training Accuracy')
-                    ax2.set_xlabel('Epoch')
-                    ax2.set_ylabel('Accuracy (%)')
-                    
-                    st.pyplot(fig)
-                else:
-                    st.error(f"Training failed: {result}")
+
+            # Start training - use slm session state key
+            success, result = st.session_state.slm.train_model(
+                st.session_state.slm.raw_text,
+                epochs=epochs,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                progress_bar=progress_bar, # Pass progress bar
+                status_text=status_text    # Pass status text
+            )
+
+            # Clear spinner and final status text after training
+            status_text.empty()
+            progress_bar.empty()
+
+            if success:
+                st.session_state.model_trained = True
+                st.success("🎉 Model trained successfully!")
+
+                # Show training stats
+                final_loss = result['losses'][-1]
+                final_acc = result['accuracies'][-1]
+                st.metric("Final Loss", f"{final_loss:.3f}")
+                st.metric("Final Accuracy", f"{final_acc:.1f}%")
+
+                # Plot training progress
+                import matplotlib.pyplot as plt
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+
+                ax1.plot(result['losses'])
+                ax1.set_title('Training Loss')
+                ax1.set_xlabel('Epoch')
+                ax1.set_ylabel('Loss')
+
+                ax2.plot(result['accuracies'])
+                ax2.set_title('Training Accuracy')
+                ax2.set_xlabel('Epoch')
+                ax2.set_ylabel('Accuracy (%)')
+
+                st.pyplot(fig)
+            else:
+                st.error(f"Training failed: {result}")
 
 # Main content area
 col1, col2 = st.columns([3, 2])
@@ -361,19 +402,22 @@ with col1:
         with col_a:
             if st.button("📋 Summarize"):
                 with st.spinner("Generating summary..."):
-                    answer = st.session_state.tlm.answer_question("summarize main points key information")
+                    # Use slm session state key
+                    answer = st.session_state.slm.answer_question("summarize main points key information")
                     st.write(answer)
         
         with col_b:
             if st.button("🔍 Main Topic"):
                 with st.spinner("Finding main topic..."):
-                    answer = st.session_state.tlm.answer_question("what is this document about main topic")
+                    # Use slm session state key
+                    answer = st.session_state.slm.answer_question("what is this document about main topic")
                     st.write(answer)
         
         with col_c:
             if st.button("💡 Key Points"):
                 with st.spinner("Extracting key points..."):
-                    answer = st.session_state.tlm.answer_question("important details key facts")
+                    # Use slm session state key
+                    answer = st.session_state.slm.answer_question("important details key facts")
                     st.write(answer)
         
         st.markdown("---")
@@ -388,7 +432,8 @@ with col1:
         
         if st.button("🔍 Get Answer") and question:
             with st.spinner("Generating answer..."):
-                answer = st.session_state.tlm.answer_question(question)
+                # Use slm session state key
+                answer = st.session_state.slm.answer_question(question)
                 st.write(answer)
         
         st.markdown("---")
@@ -402,13 +447,14 @@ with col1:
         
         col_gen1, col_gen2 = st.columns(2)
         with col_gen1:
-            max_length = st.slider("Max Length", 20, 100, 50)
+            max_length = st.slider("Max Length", 20, 200, 80) # Increased max length for generation
         with col_gen2:
             temperature = st.slider("Creativity", 0.3, 1.5, 0.8, 0.1)
         
         if st.button("📝 Generate") and seed_text:
             with st.spinner("Generating text..."):
-                generated = st.session_state.tlm.generate_text(
+                # Use slm session state key
+                generated = st.session_state.slm.generate_text(
                     seed_text, 
                     max_length=max_length,
                     temperature=temperature
@@ -419,9 +465,9 @@ with col1:
     elif st.session_state.document_loaded:
         st.info("📄 Document loaded! Now train the language model using the sidebar.")
         
-        # Show document stats
-        if hasattr(st.session_state.tlm, 'raw_text'):
-            text = st.session_state.tlm.raw_text
+        # Show document stats - use slm session state key
+        if hasattr(st.session_state.slm, 'raw_text'):
+            text = st.session_state.slm.raw_text
             st.subheader("📊 Document Statistics")
             
             col_stat1, col_stat2, col_stat3 = st.columns(3)
@@ -439,27 +485,29 @@ with col2:
     
     if st.session_state.model_trained:
         st.markdown("""
-        **🧠 Neural Language Model Trained!**
+        **🧠 Small Language Model Trained!**
         
         **Architecture:**
         - 🔤 Embedding Layer (64D)
         - 🧠 2x LSTM Layers (128 units)
         - 🎯 Dense Output Layer
         - 📊 Vocabulary: {} words
+        - 📏 Sequence Length: {} tokens
         
         **Training Complete:**
         - ✅ Learned word patterns
         - ✅ Sequence relationships
         - ✅ Document-specific style
         - ✅ Ready for inference
-        """.format(st.session_state.tlm.vocab_size))
+        """.format(st.session_state.slm.vocab_size, st.session_state.slm.max_sequence_length)) # Updated text
         
         st.header("📊 Model Stats")
-        if hasattr(st.session_state.tlm, 'vocab_size'):
-            st.metric("Vocabulary", st.session_state.tlm.vocab_size)
-            st.metric("Sequence Length", st.session_state.tlm.max_sequence_length)
-            st.metric("Text Chunks", len(st.session_state.tlm.text_chunks))
-            st.metric("Device", str(st.session_state.tlm.device).upper())
+        # Use slm session state key
+        if hasattr(st.session_state.slm, 'vocab_size'):
+            st.metric("Vocabulary", st.session_state.slm.vocab_size)
+            st.metric("Sequence Length", st.session_state.slm.max_sequence_length)
+            st.metric("Text Chunks", len(st.session_state.slm.text_chunks))
+            st.metric("Device", str(st.session_state.slm.device).upper())
     
     else:
         st.markdown("""
@@ -478,10 +526,11 @@ with col2:
         - 📈 Real-time training metrics
         - 🎯 Temperature-controlled generation
         - 💾 CPU/GPU support
+        - ⚙️ Configurable Vocabulary Size & Sequence Length
         
         **No heavy dependencies!**
-        """)
+        """) # Updated text
 
 # Footer
 st.markdown("---")
-st.markdown("🧠 **PyTorch Tiny Language Model** • Real neural network training in Streamlit!")
+st.markdown("🧠 **PyTorch Small Language Model** • Real neural network training in Streamlit!") # Updated text
