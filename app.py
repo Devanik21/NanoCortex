@@ -308,11 +308,33 @@ if 'slm' not in st.session_state:
 
 # App header
 st.title("🧠 PDF Transformer Language Model (PyTorch)")
-st.markdown("Upload a PDF and train a transformer-based neural language model on its content!")
+st.markdown("""
+<div style="background-color:#f0f2f6;padding:18px 24px 18px 24px;border-radius:10px;">
+    <h2 style="color:#3b3b3b;">🚀 Welcome to the PDF Transformer Language Model App!</h2>
+    <ul>
+        <li><b>Upload any PDF</b> and instantly extract its text.</li>
+        <li><b>Configure</b> vocabulary size, sequence length, and training parameters.</li>
+        <li><b>Train</b> a modern <span style="color:#0078d4;">Transformer-based neural language model</span> on your document.</li>
+        <li><b>Ask questions</b> about the document and get context-aware answers.</li>
+        <li><b>Generate new text</b> in the style and context of your PDF.</li>
+        <li>All computation runs <b>locally</b> on your device (CPU/GPU supported) – <span style="color:#0078d4;">no data leaves your computer</span>.</li>
+    </ul>
+    <p style="color:#666;font-size:15px;">
+        <b>How does it work?</b> This app uses PyTorch to build a Transformer neural network, similar to the architecture behind modern LLMs. It learns the patterns, style, and vocabulary of your PDF, enabling you to interact with your document in new ways.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 # Sidebar for PDF upload and training
 with st.sidebar:
     st.header("📁 Document & Training")
+    st.markdown("""
+    <div style="font-size:15px;">
+    <b>Step 1:</b> <span style="color:#0078d4;">Upload a PDF</span>.<br>
+    <b>Step 2:</b> <span style="color:#0078d4;">Configure</span> model and training.<br>
+    <b>Step 3:</b> <span style="color:#0078d4;">Train</span> and <span style="color:#0078d4;">Explore</span>!
+    </div>
+    """, unsafe_allow_html=True)
     
     uploaded_file = st.file_uploader(
         "Choose a PDF file",
@@ -421,6 +443,17 @@ with col1:
     if st.session_state.model_trained:
         st.header("🤖 AI Assistant")
         st.success("🧠 Neural model is trained and ready!")
+        st.markdown("""
+        <div style="background-color:#eaf6ff;padding:12px 18px 12px 18px;border-radius:8px;">
+        <b>What can you do?</b>
+        <ul>
+            <li>📝 <b>Summarize</b> your document</li>
+            <li>🔍 <b>Extract main topics</b> and <b>key points</b></li>
+            <li>❓ <b>Ask custom questions</b> and get context-aware answers</li>
+            <li>✨ <b>Generate new text</b> in the style of your PDF</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
         
         # Quick action buttons
         st.subheader("⚡ Quick Actions")
@@ -491,6 +524,12 @@ with col1:
     
     elif st.session_state.document_loaded:
         st.info("📄 Document loaded! Now train the language model using the sidebar.")
+        st.markdown("""
+        <div style="background-color:#fffbe6;padding:10px 16px 10px 16px;border-radius:8px;">
+        <b>Next:</b> Configure your model and start training.<br>
+        <i>Tip: Larger vocabulary and sequence length = more expressive model, but slower training.</i>
+        </div>
+        """, unsafe_allow_html=True)
         
         # Show document stats - use slm session state key
         if hasattr(st.session_state.slm, 'raw_text'):
@@ -506,61 +545,82 @@ with col1:
                 st.metric("Sentences", f"{len(re.split(r'[.!?]+', text)):,}")
     else:
         st.info("👈 Upload a PDF document first to get started.")
+        st.markdown("""
+        <div style="background-color:#f9f9f9;padding:10px 16px 10px 16px;border-radius:8px;">
+        <b>What is this app?</b><br>
+        This app lets you build a custom neural language model from any PDF, right in your browser.<br>
+        <ul>
+            <li>No cloud, no data sharing.</li>
+            <li>Great for research, summarization, and creative writing.</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
 
 with col2:
     st.header("ℹ️ How it Works")
+    st.markdown("""
+    <div style="background-color:#f0f2f6;padding:12px 18px 12px 18px;border-radius:8px;">
+    <b>App Pipeline:</b>
+    <ol>
+        <li><b>PDF Extraction:</b> Reads and cleans your PDF text.</li>
+        <li><b>Tokenization & Vocabulary:</b> Builds a custom vocabulary from your document.</li>
+        <li><b>Sequence Creation:</b> Splits text into training sequences for the model.</li>
+        <li><b>Transformer Training:</b> Trains a multi-layer Transformer neural network on your data.</li>
+        <li><b>Interactive Inference:</b> Lets you ask questions and generate new text based on your PDF.</li>
+    </ol>
+    <b>Why Transformers?</b>
+    <ul>
+        <li>Multi-head self-attention for deep context understanding</li>
+        <li>Positional encoding for word order awareness</li>
+        <li>Layer normalization for stable, fast training</li>
+        <li>Highly parallelizable and scalable</li>
+    </ul>
+    <b>Use Cases:</b>
+    <ul>
+        <li>Summarize research papers, contracts, or reports</li>
+        <li>Extract main ideas from books or articles</li>
+        <li>Generate creative writing in the style of your document</li>
+        <li>Build custom Q&A bots for your own data</li>
+    </ul>
+    <b>Limitations:</b>
+    <ul>
+        <li>Model is trained from scratch on your PDF (not a general LLM)</li>
+        <li>Performance depends on document size and your hardware</li>
+        <li>Best for single-document, focused tasks</li>
+    </ul>
+    </div>
+    """, unsafe_allow_html=True)
     
-    if st.session_state.model_trained:
-        st.markdown("""
-        **🧠 Transformer Language Model Trained!**
-        
-        **Architecture:**
-        - 🔤 Embedding Layer (256D)
-        - 🧠 6x Transformer Encoder Layers (8 heads, 1024 FF)
-        - 🌀 Positional Encoding
-        - 🎯 Dense Output Layer
-        - 📊 Vocabulary: {} words
-        - 📏 Sequence Length: {} tokens
-        
-        **Training Complete:**
-        - ✅ Learned word patterns
-        - ✅ Sequence relationships
-        - ✅ Document-specific style
-        - ✅ Ready for inference
-        """.format(st.session_state.slm.vocab_size, st.session_state.slm.max_sequence_length)) # Updated text
-        
-        st.header("📊 Model Stats")
-        # Use slm session state key
-        if hasattr(st.session_state.slm, 'vocab_size'):
-            st.metric("Vocabulary", st.session_state.slm.vocab_size)
-            st.metric("Sequence Length", st.session_state.slm.max_sequence_length)
-            st.metric("Text Chunks", len(st.session_state.slm.text_chunks))
-            st.metric("Device", str(st.session_state.slm.device).upper())
+    st.header("📊 Model Stats")
+    # Use slm session state key
+    if hasattr(st.session_state.slm, 'vocab_size'):
+        st.metric("Vocabulary", st.session_state.slm.vocab_size)
+        st.metric("Sequence Length", st.session_state.slm.max_sequence_length)
+        st.metric("Text Chunks", len(st.session_state.slm.text_chunks))
+        st.metric("Device", str(st.session_state.slm.device).upper())
     
-    else:
-        st.markdown("""
-        **🚀 PyTorch Transformer Neural Network:**
-        
-        **Training Process:**
-        1. 📄 Extract text from PDF
-        2. 🔤 Build vocabulary & tokenize
-        3. 📊 Create training sequences
-        4. 🧠 Train Transformer neural network
-        5. 🤖 Generate & answer questions
-
-        **Advanced Features:**
-        - 🔥 PyTorch-based Transformer
-        - 🧠 Multi-head Self-Attention
-        - 🌀 Positional Encoding
-        - 📈 Real-time training metrics
-        - 🎯 Temperature-controlled generation
-        - 💾 CPU/GPU support
-        - ⚙️ Configurable Vocabulary Size & Sequence Length
-        
-        **No heavy dependencies!**
-        """) # Updated text
+    st.markdown("""
+    <div style="background-color:#e8f5e9;padding:12px 18px 12px 18px;border-radius:8px;">
+    <b>Model Training Details:</b>
+    <ul>
+        <li>Trained on your device using PyTorch</li>
+        <li>Optimized for speed and efficiency</li>
+        <li>Supports mixed precision and distributed training (if available)</li>
+    </ul>
+    <b>Document Processing:</b>
+    <ul>
+        <li>Extracts text, builds vocabulary, and creates training sequences</li>
+        <li>Uses advanced regex and NLP techniques for clean extraction</li>
+    </ul>
+    </div>
+    """, unsafe_allow_html=True)
+    # ...existing code...
 
 # Footer
 st.markdown("---")
-st.markdown("🧠 **PyTorch Transformer Language Model** • Real neural network training in Streamlit!")
-st.markdown("🧠 **PyTorch Advanced Language Model** • Real neural network training in Streamlit!")
+st.markdown("""
+<div style="font-size:15px;">
+🧠 <b>PyTorch Transformer Language Model</b> • <i>Train, explore, and interact with your own documents using modern neural networks – all locally!</i><br>
+<span style="color:#888;">Created for research, learning, and fun. No data leaves your device.</span>
+</div>
+""", unsafe_allow_html=True)
