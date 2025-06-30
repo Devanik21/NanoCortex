@@ -28,12 +28,14 @@ class TextDataset(Dataset):
         return torch.tensor(sequence[:-1], dtype=torch.long), torch.tensor(sequence[-1], dtype=torch.long)
 
 class SmallLSTM(nn.Module): # Renamed class
-    def __init__(self, vocab_size, embedding_dim=64, hidden_dim=128, num_layers=2):
+    # Increased num_layers from 8 to 12
+    def __init__(self, vocab_size, embedding_dim=64, hidden_dim=128, num_layers=12):
         super(SmallLSTM, self).__init__() # Updated super call
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        
+
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        # Updated LSTM layer initialization with new num_layers
         self.lstm = nn.LSTM(embedding_dim, hidden_dim, num_layers, batch_first=True, dropout=0.2)
         self.fc = nn.Linear(hidden_dim, vocab_size)
         self.dropout = nn.Dropout(0.3)
@@ -136,7 +138,7 @@ class SmallLanguageModel: # Renamed class
         dataset = TextDataset(sequences)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-        # Initialize model - use SmallLSTM
+        # Initialize model - use SmallLSTM with default (now 12) layers
         self.model = SmallLSTM(self.vocab_size).to(self.device)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
@@ -489,7 +491,7 @@ with col2:
         
         **Architecture:**
         - 🔤 Embedding Layer (64D)
-        - 🧠 2x LSTM Layers (128 units)
+        - 🧠 12x LSTM Layers (128 units) # Updated layer count
         - 🎯 Dense Output Layer
         - 📊 Vocabulary: {} words
         - 📏 Sequence Length: {} tokens
@@ -519,10 +521,10 @@ with col2:
         3. 📊 Create training sequences
         4. 🧠 Train LSTM neural network
         5. 🤖 Generate & answer questions
-        
+
         **Model Features:**
         - 🔥 PyTorch-based (lightweight)
-        - 🧠 LSTM architecture
+        - 🧠 LSTM architecture (12 layers) # Updated layer count
         - 📈 Real-time training metrics
         - 🎯 Temperature-controlled generation
         - 💾 CPU/GPU support
