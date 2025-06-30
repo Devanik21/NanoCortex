@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 # Set page config
 st.set_page_config(
-    page_title="PDF Small Language Model", # Updated title
+    page_title="PDF Transformer Language Model",
     page_icon="🧠",
     layout="wide"
 )
@@ -27,25 +27,46 @@ class TextDataset(Dataset):
         sequence = self.sequences[idx]
         return torch.tensor(sequence[:-1], dtype=torch.long), torch.tensor(sequence[-1], dtype=torch.long)
 
-class SmallLSTM(nn.Module): # Renamed class
-    # Increased num_layers from 8 to 12
-    def __init__(self, vocab_size, embedding_dim=64, hidden_dim=128, num_layers=12):
-        super(SmallLSTM, self).__init__() # Updated super call
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=512):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
 
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        # Updated LSTM layer initialization with new num_layers
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, num_layers, batch_first=True, dropout=0.2)
-        self.fc = nn.Linear(hidden_dim, vocab_size)
-        self.dropout = nn.Dropout(0.3)
-        
     def forward(self, x):
-        embedded = self.embedding(x)
-        lstm_out, _ = self.lstm(embedded)
-        lstm_out = self.dropout(lstm_out[:, -1, :])
-        output = self.fc(lstm_out)
-        return output
+        x = x + self.pe[:, :x.size(1), :]
+        return x
+
+class TransformerLM(nn.Module):
+    def __init__(self, vocab_size, d_model=256, nhead=8, num_layers=6, dim_feedforward=1024, max_seq_len=128, dropout=0.2):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, max_seq_len)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.norm = nn.LayerNorm(d_model)
+        self.fc = nn.Linear(d_model, vocab_size)
+
+    def forward(self, x):
+        emb = self.embedding(x)
+        emb = self.pos_encoder(emb)
+        out = self.transformer(emb)
+        out = self.norm(out[:, -1, :])
+        logits = self.fc(out)
+        return logits
 
 class SmallLanguageModel: # Renamed class
     def __init__(self):
@@ -138,10 +159,18 @@ class SmallLanguageModel: # Renamed class
         dataset = TextDataset(sequences)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-        # Initialize model - use SmallLSTM with default (now 12) layers
-        self.model = SmallLSTM(self.vocab_size).to(self.device)
+        # Initialize the advanced model
+        self.model = TransformerLM(
+            self.vocab_size,
+            d_model=256,
+            nhead=8,
+            num_layers=6,
+            dim_feedforward=1024,
+            max_seq_len=self.max_sequence_length,
+            dropout=0.2
+        ).to(self.device)
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        optimizer = optim.AdamW(self.model.parameters(), lr=learning_rate)
 
         # Training loop
         losses = []
@@ -194,11 +223,7 @@ class SmallLanguageModel: # Renamed class
         # Preprocess seed text similarly to training data
         seed_text = self.preprocess_text(seed_text)
         words = seed_text.split()
-        sequence = []
-        
-        # Use configurable max_sequence_length
-        for word in words[-self.max_sequence_length:]:
-            sequence.append(self.word_to_idx.get(word, 0))
+        sequence = [self.word_to_idx.get(word, 0) for word in words[-self.max_sequence_length:]]
         
         # Pad if necessary
         while len(sequence) < self.max_sequence_length:
@@ -282,8 +307,8 @@ if 'slm' not in st.session_state:
     st.session_state.model_trained = False
 
 # App header
-st.title("🧠 PDF Small Language Model (PyTorch)") # Updated title
-st.markdown("Upload a PDF and train a small neural language model on its content!")
+st.title("🧠 PDF Transformer Language Model (PyTorch)")
+st.markdown("Upload a PDF and train a transformer-based neural language model on its content!")
 
 # Sidebar for PDF upload and training
 with st.sidebar:
@@ -487,11 +512,12 @@ with col2:
     
     if st.session_state.model_trained:
         st.markdown("""
-        **🧠 Small Language Model Trained!**
+        **🧠 Transformer Language Model Trained!**
         
         **Architecture:**
-        - 🔤 Embedding Layer (64D)
-        - 🧠 12x LSTM Layers (128 units) # Updated layer count
+        - 🔤 Embedding Layer (256D)
+        - 🧠 6x Transformer Encoder Layers (8 heads, 1024 FF)
+        - 🌀 Positional Encoding
         - 🎯 Dense Output Layer
         - 📊 Vocabulary: {} words
         - 📏 Sequence Length: {} tokens
@@ -513,18 +539,19 @@ with col2:
     
     else:
         st.markdown("""
-        **🚀 PyTorch Neural Network:**
+        **🚀 PyTorch Transformer Neural Network:**
         
         **Training Process:**
         1. 📄 Extract text from PDF
         2. 🔤 Build vocabulary & tokenize
         3. 📊 Create training sequences
-        4. 🧠 Train LSTM neural network
+        4. 🧠 Train Transformer neural network
         5. 🤖 Generate & answer questions
 
-        **Model Features:**
-        - 🔥 PyTorch-based (lightweight)
-        - 🧠 LSTM architecture (12 layers) # Updated layer count
+        **Advanced Features:**
+        - 🔥 PyTorch-based Transformer
+        - 🧠 Multi-head Self-Attention
+        - 🌀 Positional Encoding
         - 📈 Real-time training metrics
         - 🎯 Temperature-controlled generation
         - 💾 CPU/GPU support
@@ -535,4 +562,5 @@ with col2:
 
 # Footer
 st.markdown("---")
-st.markdown("🧠 **PyTorch Small Language Model** • Real neural network training in Streamlit!") # Updated text
+st.markdown("🧠 **PyTorch Transformer Language Model** • Real neural network training in Streamlit!")
+st.markdown("🧠 **PyTorch Advanced Language Model** • Real neural network training in Streamlit!")
