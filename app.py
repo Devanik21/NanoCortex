@@ -8,6 +8,24 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
+import os
+import logging
+
+# Advanced NLP
+try:
+    import nltk
+    nltk.download('punkt', quiet=True)
+    nltk.download('wordnet', quiet=True)
+    nltk.download('stopwords', quiet=True)
+    from nltk.tokenize import sent_tokenize, word_tokenize
+    from nltk.stem import WordNetLemmatizer
+    from nltk.corpus import stopwords
+    NLTK_AVAILABLE = True
+except Exception:
+    NLTK_AVAILABLE = False
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 # Set page config
 st.set_page_config(
@@ -15,6 +33,13 @@ st.set_page_config(
     page_icon="🧠",
     layout="wide"
 )
+
+# Device selection
+device_options = ['cpu']
+if torch.cuda.is_available():
+    device_options.append('cuda')
+device_choice = st.sidebar.selectbox("Device", device_options, index=len(device_options)-1)
+DEVICE = torch.device(device_choice)
 
 class TextDataset(Dataset):
     def __init__(self, sequences):
@@ -68,19 +93,37 @@ class TransformerLM(nn.Module):
         logits = self.fc(out)
         return logits
 
-class SmallLanguageModel: # Renamed class
+    def get_attention(self, x):
+        # For visualization: get attention weights from the last encoder layer
+        # Only works if batch_first=True
+        with torch.no_grad():
+            emb = self.embedding(x)
+            emb = self.pos_encoder(emb)
+            # Only works for 1 batch
+            attn_weights = []
+            def hook(module, input, output):
+                attn_weights.append(module.self_attn.attn_output_weights.cpu())
+            handle = self.transformer.layers[-1].self_attn.register_forward_hook(hook)
+            _ = self.transformer(emb)
+            handle.remove()
+            return attn_weights[0] if attn_weights else None
+
+class SmallLanguageModel:
     def __init__(self):
         self.model = None
         self.vocab_size = 0
-        # Default configurable parameters
-        self.max_sequence_length = 64 # Increased default
-        self.max_vocab_size = 5000    # Increased default and made configurable limit
+        self.max_sequence_length = 64
+        self.max_vocab_size = 5000
         self.word_to_idx = {}
         self.idx_to_word = {}
         self.text_chunks = []
         self.is_trained = False
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
+        self.device = DEVICE
+        self.raw_text = ""
+        self.lemmatizer = WordNetLemmatizer() if NLTK_AVAILABLE else None
+        self.stop_words = set(stopwords.words('english')) if NLTK_AVAILABLE else set()
+        self.model_path = "slm_model.pt"
+
     def extract_text_from_pdf(self, pdf_file):
         """Extract text from uploaded PDF file"""
         try:
@@ -93,19 +136,31 @@ class SmallLanguageModel: # Renamed class
             st.error(f"Error reading PDF: {str(e)}")
             return None
     
-    def preprocess_text(self, text):
-        """Clean and preprocess text"""
-        # Clean text - keep punctuation attached initially
-        text = re.sub(r'([.,!?;:])', r' \1 ', text) # Add spaces around punctuation
-        text = re.sub(r'[^\w\s.,!?;:-]', ' ', text) # Remove other special characters
-        text = re.sub(r'\s+', ' ', text)
-        text = text.lower().strip()
-        
-        # Split into chunks for training
-        sentences = re.split(r'[.!?]+', text)
-        self.text_chunks = [s.strip() for s in sentences if len(s.strip()) > 10]
-        
-        return text
+    def preprocess_text(self, text, remove_stopwords=True, lemmatize=True):
+        """Advanced clean and preprocess text"""
+        if not text:
+            return ""
+        # Sentence splitting
+        if NLTK_AVAILABLE:
+            sentences = sent_tokenize(text)
+        else:
+            sentences = re.split(r'[.!?]+', text)
+        processed_sentences = []
+        for sent in sentences:
+            sent = re.sub(r'([.,!?;:])', r' \1 ', sent)
+            sent = re.sub(r'[^\w\s.,!?;:-]', ' ', sent)
+            sent = re.sub(r'\s+', ' ', sent)
+            sent = sent.lower().strip()
+            if NLTK_AVAILABLE:
+                words = word_tokenize(sent)
+                if remove_stopwords:
+                    words = [w for w in words if w not in self.stop_words]
+                if lemmatize:
+                    words = [self.lemmatizer.lemmatize(w) for w in words]
+                sent = ' '.join(words)
+            processed_sentences.append(sent)
+        self.text_chunks = [s for s in processed_sentences if len(s.split()) > 5]
+        return ' '.join(processed_sentences)
     
     def build_vocabulary(self, text):
         """Build vocabulary from text"""
@@ -171,11 +226,12 @@ class SmallLanguageModel: # Renamed class
         ).to(self.device)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.AdamW(self.model.parameters(), lr=learning_rate)
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=max(epochs//5,1), gamma=0.7)
 
         # Training loop
         losses = []
         accuracies = []
-
+        perplexities = []
         for epoch in range(epochs):
             epoch_loss = 0
             correct = 0
@@ -199,9 +255,11 @@ class SmallLanguageModel: # Renamed class
 
             avg_loss = epoch_loss / len(dataloader)
             accuracy = 100 * correct / total
-
+            perplexity = np.exp(avg_loss) if avg_loss < 20 else float('inf')
             losses.append(avg_loss)
             accuracies.append(accuracy)
+            perplexities.append(perplexity)
+            scheduler.step()
 
             # Update Streamlit UI elements if provided
             if progress_bar:
@@ -210,9 +268,44 @@ class SmallLanguageModel: # Renamed class
                 status_text.text(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f} | Acc: {accuracy:.2f}%")
 
         self.is_trained = True
-        return True, {'losses': losses, 'accuracies': accuracies}
-    
-    def generate_text(self, seed_text, max_length=50, temperature=0.8):
+        # Save model after training
+        self.save_model()
+        return True, {'losses': losses, 'accuracies': accuracies, 'perplexities': perplexities}
+
+    def save_model(self):
+        if self.model:
+            torch.save({
+                'model_state_dict': self.model.state_dict(),
+                'vocab_size': self.vocab_size,
+                'word_to_idx': self.word_to_idx,
+                'idx_to_word': self.idx_to_word,
+                'max_sequence_length': self.max_sequence_length,
+                'max_vocab_size': self.max_vocab_size
+            }, self.model_path)
+            logging.info(f"Model saved to {self.model_path}")
+
+    def load_model(self):
+        if os.path.exists(self.model_path):
+            checkpoint = torch.load(self.model_path, map_location=self.device)
+            self.vocab_size = checkpoint['vocab_size']
+            self.word_to_idx = checkpoint['word_to_idx']
+            self.idx_to_word = checkpoint['idx_to_word']
+            self.max_sequence_length = checkpoint['max_sequence_length']
+            self.max_vocab_size = checkpoint['max_vocab_size']
+            self.model = TransformerLM(
+                self.vocab_size,
+                d_model=256,
+                nhead=8,
+                num_layers=6,
+                dim_feedforward=1024,
+                max_seq_len=self.max_sequence_length,
+                dropout=0.2
+            ).to(self.device)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.is_trained = True
+            logging.info("Model loaded from disk.")
+
+    def generate_text(self, seed_text, max_length=50, temperature=0.8, visualize_attention=False):
         """Generate text using the trained model"""
         if not self.is_trained or not self.model:
             return "Model is not trained yet!"
@@ -253,6 +346,9 @@ class SmallLanguageModel: # Renamed class
                 # Update sequence
                 sequence = sequence[1:] + [next_idx]
         
+        if visualize_attention and hasattr(self.model, 'get_attention'):
+            attn = self.model.get_attention(x)
+            return ' '.join(generated), attn
         return ' '.join(generated)
     
     def answer_question(self, question):
@@ -300,11 +396,14 @@ class SmallLanguageModel: # Renamed class
                 return "Could not find relevant information in the document."
 
 
-# Initialize the model - use SmallLanguageModel and slm session state key
+# Initialize the model
 if 'slm' not in st.session_state:
     st.session_state.slm = SmallLanguageModel()
     st.session_state.document_loaded = False
     st.session_state.model_trained = False
+else:
+    # Update device if changed
+    st.session_state.slm.device = DEVICE
 
 # App header
 st.title("🧠 PDF Transformer Language Model (PyTorch)")
@@ -415,12 +514,14 @@ with st.sidebar:
                 # Show training stats
                 final_loss = result['losses'][-1]
                 final_acc = result['accuracies'][-1]
+                final_ppl = result['perplexities'][-1]
                 st.metric("Final Loss", f"{final_loss:.3f}")
                 st.metric("Final Accuracy", f"{final_acc:.1f}%")
+                st.metric("Final Perplexity", f"{final_ppl:.2f}")
 
                 # Plot training progress
                 import matplotlib.pyplot as plt
-                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+                fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 4))
 
                 ax1.plot(result['losses'])
                 ax1.set_title('Training Loss')
@@ -431,6 +532,11 @@ with st.sidebar:
                 ax2.set_title('Training Accuracy')
                 ax2.set_xlabel('Epoch')
                 ax2.set_ylabel('Accuracy (%)')
+
+                ax3.plot(result['perplexities'])
+                ax3.set_title('Perplexity')
+                ax3.set_xlabel('Epoch')
+                ax3.set_ylabel('PPL')
 
                 st.pyplot(fig)
             else:
@@ -505,22 +611,42 @@ with col1:
             placeholder="The main findings show that..."
         )
         
-        col_gen1, col_gen2 = st.columns(2)
+        col_gen1, col_gen2, col_gen3 = st.columns([1,1,1])
         with col_gen1:
-            max_length = st.slider("Max Length", 20, 200, 80) # Increased max length for generation
+            max_length = st.slider("Max Length", 20, 200, 80)
         with col_gen2:
             temperature = st.slider("Creativity", 0.3, 1.5, 0.8, 0.1)
+        with col_gen3:
+            visualize_attention = st.checkbox("Show Attention", value=False)
         
         if st.button("📝 Generate") and seed_text:
             with st.spinner("Generating text..."):
-                # Use slm session state key
-                generated = st.session_state.slm.generate_text(
-                    seed_text, 
-                    max_length=max_length,
-                    temperature=temperature
-                )
-                st.subheader("🎯 Generated Text:")
-                st.write(generated)
+                if visualize_attention:
+                    generated, attn = st.session_state.slm.generate_text(
+                        seed_text,
+                        max_length=max_length,
+                        temperature=temperature,
+                        visualize_attention=True
+                    )
+                    st.subheader("🎯 Generated Text:")
+                    st.write(generated)
+                    if attn is not None:
+                        import matplotlib.pyplot as plt
+                        import seaborn as sns
+                        fig, ax = plt.subplots(figsize=(8, 4))
+                        sns.heatmap(attn.squeeze().cpu().numpy(), ax=ax, cmap="viridis")
+                        ax.set_title("Attention Weights (last layer, last head)")
+                        st.pyplot(fig)
+                    else:
+                        st.info("Attention visualization not available for this model.")
+                else:
+                    generated = st.session_state.slm.generate_text(
+                        seed_text,
+                        max_length=max_length,
+                        temperature=temperature
+                    )
+                    st.subheader("🎯 Generated Text:")
+                    st.write(generated)
     
     elif st.session_state.document_loaded:
         st.info("📄 Document loaded! Now train the language model using the sidebar.")
@@ -598,6 +724,9 @@ with col2:
         st.metric("Sequence Length", st.session_state.slm.max_sequence_length)
         st.metric("Text Chunks", len(st.session_state.slm.text_chunks))
         st.metric("Device", str(st.session_state.slm.device).upper())
+        if st.session_state.slm.model:
+            total_params = sum(p.numel() for p in st.session_state.slm.model.parameters())
+            st.metric("Parameters", f"{total_params:,}")
     st.markdown("""
     <div style="background-color:#23272e;padding:12px 18px 12px 18px;border-radius:8px;">
     <b style="color:#fff;">Model Training Details:</b>
