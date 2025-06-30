@@ -623,4 +623,4 @@ st.markdown("""
 <span style="color:#666;">Created for research, learning, and fun. No data leaves your device.</span>
 </div>
 """, unsafe_allow_html=True)
-""", unsafe_allow_html=True)
+
