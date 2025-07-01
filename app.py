@@ -429,9 +429,7 @@ with st.sidebar:
     st.header("📁 Document & Training")
     st.markdown("""
     <div style="font-size:15px;background-color:#23272e;padding:10px 16px 10px 16px;border-radius:8px;color:#b0b8c1;">
-    <b>Step 1:</b> <span style="color:#4fc3f7;">Upload a PDF</span>.<br>
-    <b>Step 2:</b> <span style="color:#4fc3f7;">Configure</span> model and training.<br>
-    <b>Step 3:</b> <span style="color:#4fc3f7;">Train</span> and <span style="color:#4fc3f7;">Explore</span>!
+    Save or load your trained model to avoid retraining.
     </div>
     """, unsafe_allow_html=True)
     
@@ -541,6 +539,39 @@ with st.sidebar:
                 st.pyplot(fig)
             else:
                 st.error(f"Training failed: {result}")
+
+    # --- Model Management Section ---
+    st.header("💾 Model Management")
+    st.markdown("""
+    <div style="font-size:15px;background-color:#23272e;padding:10px 16px 10px 16px;border-radius:8px;color:#b0b8c1;">
+    Save or load your trained model to avoid retraining.
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.session_state.model_trained:
+        if st.button("💾 Save Model"):
+            with st.spinner("Saving model..."):
+                st.session_state.slm.save_model()
+                st.success(f"Model saved to {st.session_state.slm.model_path}")
+    else:
+        st.info("Train a model first to save it.")
+
+    if st.button("📂 Load Model"):
+        with st.spinner("Loading model..."):
+            try:
+                st.session_state.slm.load_model()
+                if st.session_state.slm.is_trained:
+                    st.session_state.model_trained = True
+                    # Optionally, set document_loaded if text_chunks exist
+                    if st.session_state.slm.text_chunks:
+                        st.session_state.document_loaded = True
+                    st.success(f"Model loaded from {st.session_state.slm.model_path}")
+                    if not st.session_state.slm.text_chunks:
+                        st.warning("Model loaded, but document text is not loaded. Upload the original PDF again for document-based QA.")
+                else:
+                    st.error("Could not load model.")
+            except Exception as e:
+                st.error(f"Error loading model: {e}")
 
 # Main content area
 col1, col2 = st.columns([3, 2])
@@ -752,4 +783,3 @@ st.markdown("""
 <span style="color:#666;">Created for research, learning, and fun. No data leaves your device.</span>
 </div>
 """, unsafe_allow_html=True)
-
