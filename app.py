@@ -68,7 +68,7 @@ class PositionalEncoding(nn.Module):
         return x
 
 class TransformerLM(nn.Module):
-    def __init__(self, vocab_size, d_model=256, nhead=8, num_layers=6, dim_feedforward=1024, max_seq_len=128, dropout=0.2):
+    def __init__(self, vocab_size, d_model=64, nhead=2, num_layers=2, dim_feedforward=128, max_seq_len=64, dropout=0.1):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.pos_encoder = PositionalEncoding(d_model, max_seq_len)
@@ -112,8 +112,8 @@ class SmallLanguageModel:
     def __init__(self):
         self.model = None
         self.vocab_size = 0
-        self.max_sequence_length = 64
-        self.max_vocab_size = 5000
+        self.max_sequence_length = 32  # reduced default
+        self.max_vocab_size = 2000     # reduced default
         self.word_to_idx = {}
         self.idx_to_word = {}
         self.text_chunks = []
@@ -195,7 +195,7 @@ class SmallLanguageModel:
 
         return sequences
     
-    def train_model(self, text, epochs=15, batch_size=32, learning_rate=0.001, progress_bar=None, status_text=None):
+    def train_model(self, text, epochs=10, batch_size=16, learning_rate=0.001, progress_bar=None, status_text=None):
         """Train the language model"""
         # Preprocess text and build vocabulary
         clean_text = self.preprocess_text(text)
@@ -214,15 +214,15 @@ class SmallLanguageModel:
         dataset = TextDataset(sequences)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-        # Initialize the advanced model
+        # Initialize the simplified model
         self.model = TransformerLM(
             self.vocab_size,
-            d_model=256,
-            nhead=8,
-            num_layers=6,
-            dim_feedforward=1024,
+            d_model=64,
+            nhead=2,
+            num_layers=2,
+            dim_feedforward=128,
             max_seq_len=self.max_sequence_length,
-            dropout=0.2
+            dropout=0.1
         ).to(self.device)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.AdamW(self.model.parameters(), lr=learning_rate)
@@ -294,12 +294,12 @@ class SmallLanguageModel:
             self.max_vocab_size = checkpoint['max_vocab_size']
             self.model = TransformerLM(
                 self.vocab_size,
-                d_model=256,
-                nhead=8,
-                num_layers=6,
-                dim_feedforward=1024,
+                d_model=64,
+                nhead=2,
+                num_layers=2,
+                dim_feedforward=128,
                 max_seq_len=self.max_sequence_length,
-                dropout=0.2
+                dropout=0.1
             ).to(self.device)
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.is_trained = True
@@ -464,20 +464,19 @@ with st.sidebar:
         
         # Add configurable parameters
         st.subheader("⚙️ Model Configuration")
-        max_vocab_size = st.slider("Max Vocabulary Size", 1000, 10000, st.session_state.slm.max_vocab_size, 500)
-        max_sequence_length = st.slider("Sequence Length", 30, 128, st.session_state.slm.max_sequence_length, 8)
+        max_vocab_size = st.slider("Max Vocabulary Size", 500, 5000, st.session_state.slm.max_vocab_size, 250)
+        max_sequence_length = st.slider("Sequence Length", 8, 64, st.session_state.slm.max_sequence_length, 4)
 
         # Update model instance with chosen parameters
         st.session_state.slm.max_vocab_size = max_vocab_size
         st.session_state.slm.max_sequence_length = max_sequence_length
 
-
         st.subheader("🏋️ Training Parameters")
         col1, col2 = st.columns(2)
         with col1:
-            epochs = st.slider("Epochs", 5, 100, 30)
+            epochs = st.slider("Epochs", 3, 30, 10)
         with col2:
-            batch_size = st.selectbox("Batch Size", [4,8,16, 32, 64], index=1)
+            batch_size = st.selectbox("Batch Size", [4,8,16,32], index=2)
         
         learning_rate = st.select_slider(
             "Learning Rate", 
@@ -773,8 +772,6 @@ with col2:
     </ul>
     </div>
     """, unsafe_allow_html=True)
-    # ...existing code...
-
 # Footer
 st.markdown("---")
 st.markdown("""
@@ -783,3 +780,4 @@ st.markdown("""
 <span style="color:#666;">Created for research, learning, and fun. No data leaves your device.</span>
 </div>
 """, unsafe_allow_html=True)
+
